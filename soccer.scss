@@ -1,0 +1,112 @@
+// ------------------ BASIS ------------------
+body {
+  font-family: 'Roboto', sans-serif;
+  background-color: #f4f7fb;
+  color: #222;
+  margin: 0;
+  padding: 0;
+}
+
+.container, .container-fluid {
+  padding: 2rem;
+}
+
+// ------------------ CARDS ------------------
+.card {
+  background: #ffffff;
+  border-radius: 1rem;
+  box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.08);
+  border: 1px solid #e0e6ed;
+  padding: 1rem;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+}
+
+.card-title {
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: #333;
+}
+
+// ------------------ NAVIGATION & TABS ------------------
+.nav-tabs .nav-link {
+  color: #888;
+  border: none;
+  background: transparent;
+}
+
+.nav-tabs .nav-link.active {
+  color: #2b7a78;
+  background: #e3f6f5;
+  border-radius: 0.5rem 0.5rem 0 0;
+  font-weight: 600;
+  border-bottom: 3px solid #3aafa9;
+}
+
+// ------------------ VALUE BOXES ------------------
+.value-box {
+  background: #e3f6f5;
+  border-left: 5px solid #3aafa9;
+  border-radius: 0.6rem;
+  padding: 1.2rem;
+  margin-bottom: 1rem;
+  color: #003f5c;
+  box-shadow: 0 0.4rem 0.9rem rgba(0, 0, 0, 0.1);
+}
+
+.value-box:hover {
+  transform: scale(1.02);
+}
+
+.value-box-title {
+  font-size: 1.2rem;
+  font-weight: 500;
+  color: #555;
+}
+
+// ------------------ TOOLTIP ------------------
+.plotly-tooltip {
+  background-color: #ffffff !important;
+  border: 1px solid #3aafa9 !important;
+  color: #222 !important;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  padding: 0.6rem;
+}
+
+// ------------------ HIGHLIGHTED BARS ------------------
+.progress-bar.bg-info    { background-color: #6bc3d1 !important; }
+.progress-bar.bg-primary { background-color: #3aafa9 !important; }
+.progress-bar.bg-warning { background-color: #ffc857 !important; }
+
+// ------------------ TABLES ------------------
+table.dataTable thead {
+  background-color: #def2f1;
+  color: #17252a;
+  font-weight: 600;
+}
+
+table.dataTable tbody td {
+  background-color: #ffffff;
+  color: #222;
+}
+
+table.dataTable tbody tr:hover td {
+  background-color: #f2fdfc;
+}
+
+// ------------------ BUTTONS ------------------
+.btn-primary {
+  background-color: #3aafa9;
+  border: none;
+  font-weight: 600;
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background-color: #2b7a78;
+  color: #fff;
+}
