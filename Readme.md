@@ -1,185 +1,168 @@
-# Football Scouting Dashboard: Code Explanation
+# Football Scouting Dashboard: Code Explanation (Advanced FMV & Opportunity Score Version)
 
-This document provides a detailed explanation of the R Shiny application designed for football scouting. It focuses on data preparation, Fair Market Value (FMV) estimation, and the interactive user interface.
+This document provides a detailed explanation of the R Shiny application designed for football scouting. This version incorporates more advanced data features, including player performance metrics and league strength adjustments, into its Fair Market Value (FMV) estimation and a revised Opportunity Score.
 
 ## 1. Libraries
 
 The application utilizes several R packages:
 
-*   **`shiny`**: The core framework for building interactive web applications in R.
-*   **`tidyverse`**: A collection of R packages for data science, including:
-    *   `dplyr`: For data manipulation (filtering, mutating, joining).
-    *   `tidyr`: For tidying data.
-    *   `ggplot2` (implicitly used by `plotly`): For creating static plots (though `plotly` makes them interactive).
-    *   `readr`: For fast and efficient reading of CSV files.
-*   **`lubridate`**: For easier manipulation of date and time objects.
-*   **`plotly`**: For creating interactive charts and visualizations.
-*   **`DT`**: For rendering R data frames as interactive HTML tables in the Shiny app.
-*   **`bslib`**: For theming Shiny apps with Bootstrap 5 and providing UI components like `value_box()`.
-*   **`bsicons`**: For easily adding Bootstrap icons to the UI.
-*   **`sass`**: For compiling SCSS (Sassy CSS) files at runtime, allowing for more advanced custom styling.
+*   **`shiny`**: Core framework for web applications.
+*   **`tidyverse`**: For comprehensive data manipulation (`dplyr`, `tidyr`), reading data (`readr`), and plotting foundations.
+*   **`lubridate`**: For easier date and time manipulation.
+*   **`plotly`**: For creating interactive charts.
+*   **`DT`**: For rendering interactive HTML tables.
+*   **`bslib`**: For modern Bootstrap 5 theming and UI components like `value_box`.
+*   **`bsicons`**: For Bootstrap icons.
+*   **`sass`**: For compiling SCSS to CSS for custom styling.
+    *   *(Note: `glmnet` was in the library list of the "NEW CODE" but not used in its FMV model, which uses `lm`. If a Ridge/Lasso regression were implemented, `glmnet` would be essential.)*
 
 *(The R code for loading these libraries is located in the `app.R` file.)*
 
 ## 2. Helper Functions
 
-These are small, reusable functions to simplify common tasks:
+These utility functions simplify common tasks:
 
-*   **`parse_euro(x)`**:
-    *   Takes a character string `x` representing a number in European format (e.g., "12.345,67").
-    *   Uses `readr::parse_number()` to convert it into a numeric value, specifying "." as the grouping mark and "," as the decimal mark.
-    *   `suppressWarnings()` prevents warnings if parsing fails.
-
-*   **`fmt_euro(x)`**:
-    *   Formats a numeric value `x` as a Euro currency string (e.g., "€12.346").
-    *   Returns "N/A" if `x` is `NA`, non-finite, or non-convertible to numeric.
-    *   Otherwise, rounds to 0 decimal places, formats with "." as thousands separator, and prepends "€".
-
-*   **`make_vb(title, value, icon, theme)`**:
-    *   A wrapper for `bslib::value_box()`, standardizing its appearance (small title, icon size, no bottom margin).
+*   **`parse_euro(x)`**: Converts European-formatted number strings (e.g., "12.345,67") to numeric values.
+*   **`fmt_euro(x)`**: Formats numeric values into Euro currency strings (e.g., "€12.345"), handling `NA` or non-finite inputs gracefully by returning "N/A".
+*   **`make_vb(title, value, icon, theme)`**: A wrapper for `bslib::value_box()` to create consistently styled Key Performance Indicator (KPI) cards.
+*   **`%||%` (Infix Operator)**: A custom operator that returns the right-hand side `b` if the left-hand side `a` is `NULL`; otherwise, it returns `a`. Useful for providing default values.
 
 *(The R code for these helper functions is located in the `app.R` file.)*
 
 ## 3. Data Preparation (`prep_data()` function)
 
-This function is the heart of the data processing pipeline. It is executed once when the app starts, and its result is stored in `master_data`.
+This is the central function for all data loading, cleaning, feature engineering, and modeling. It's executed once when the Shiny application starts.
 
 ### 3.1 Load Raw CSVs
-*   A helper function `read_robust_csv` is defined to load CSVs (`players.csv`, `transfers.csv`, `valuations.csv`). It uses `tryCatch` to handle file reading errors, returning an empty `tibble` and a warning if a file can't be loaded.
-*   All columns are initially read as character type (`cols(.default = "c")`) to prevent type misinterpretation.
-*   The application stops if the essential `players.csv` cannot be loaded.
+*   Data is loaded from multiple CSV files:
+    *   `players.csv`: Core player information.
+    *   `transfers.csv`: Player transfer history.
+    *   `player_valuations.csv`: Historical market valuations (e.g., from Transfermarkt).
+    *   `appearances.csv`: Player match appearance data (minutes, goals, assists).
+    *   `competitions.csv`: Information about leagues and competitions.
+*   All columns are initially read as character type to ensure controlled parsing later.
 
-### 3.2 Clean Numeric & Date Columns
-*   **Numeric Parsing**:
-    *   An internal helper `ensure_numeric_col` ensures specified columns exist and are converted to numeric. It uses `parse_euro` for `transfer_fee` and `market_value_in_eur`.
-*   **Date Parsing**:
-    *   `to_date_robust(x_val)` converts character strings to `Date` objects, trying common R formats first, then `lubridate::parse_date_time` for more flexibility.
-    *   `ensure_date_col` applies this robust date parsing to relevant date columns in the loaded tables (`date_of_birth`, `contract_expiration_date`, `transfer_date`, `date`).
+### 3.2 Clean Numerics & Dates
+*   `transfer_fee` and `market_value_in_eur` are converted to numeric using `parse_euro`.
+*   Date columns (`date_of_birth`, `contract_expiration_date`, `transfer_date`, `date` in valuations, `match_date` from appearances) are converted to `Date` objects using a helper function that attempts multiple common date formats.
+*   Performance statistics from `appearances` (`minutes_played`, `goals`, `assists`) are converted to numeric.
 
-### 3.3 Last Market Value and Last Transfer Fee
-*   **`last_val`**: For each player, it extracts the most recent (latest `date`) market valuation from the `valuations` data. Rows with missing `player_id` or `date` are filtered out first.
-*   **`last_fee`**: Similarly, it extracts the most recent (latest `transfer_date`) transfer fee for each player from the `transfers` data.
-*   If the source tibbles are empty or lack necessary columns, these will result in empty tibbles with the correct column types.
+### 3.3 Latest Market Value (MV) & Transfer Fee
+*   For each player, the most recent `market_value` is extracted from `valuations`.
+*   Similarly, the most recent `transfer_fee` is extracted from `transfers`.
 
-### 3.4 Working Dataframe (`df`)
-*   The main dataframe `df` is initialized with selected columns from the `players` data. Essential columns are checked, and if missing, they are added as `NA` with a warning.
-*   **Calculated Features**:
-    *   `age`: Player's current age in years.
-    *   `contract_remaining_years`: Years remaining on the player's contract. If the contract is expired or the expiration date is `NA`, this is set to 0.
-*   `last_val` and `last_fee` are `left_join`ed to `df`. `player_id` is explicitly cast to character type before joining to ensure compatibility. Joined monetary values are also cast to numeric.
+### 3.4 One-Year Performance Snapshot & League Strength
+This section introduces performance metrics and adjusts for league difficulty.
 
-### 3.5 Base FMV Model (Log-Linear Regression)
-This section details the estimation of a player's Fair Market Value (FMV) using a linear regression model.
+*   **Performance Aggregation (`perf` table)**:
+    *   Filters `appearances` for matches within the last 365 days.
+    *   For each player, it calculates:
+        *   `season_minutes`: Total minutes played.
+        *   `season_goals`: Total goals scored.
+        *   `season_assists`: Total assists provided.
+        *   `league_main`: The primary league the player participated in (determined by the most frequent league name in their appearances).
+*   **League Strength Coefficients (`league_strength` table & join)**:
+    *   A predefined `tribble` (a way to create a small data frame inline) assigns strength coefficients to major leagues (e.g., Premier League = 1.0, Bundesliga = 0.95, Other = 0.60).
+    *   This `league_strength` is joined to the `perf` data based on `league_main`. A default coefficient (0.60) is applied if a league is not in the predefined list or if `league_main` is NA (then categorized as "Other").
+    *   `league_coef`: The resulting league strength coefficient for the player.
+    *   `prod_per90`: Player productivity (goals + assists) per 90 minutes, calculated as `(season_goals + season_assists) / (season_minutes / 90)`. If `season_minutes` is 0, `prod_per90` will be NA (or 0 depending on handling).
 
-1.  **Log-Transform Target Variable**:
-    *   The `market_value` is log-transformed (`log1p(market_value)`) to create `log_market_value`. This is a common practice for monetary values in regression to stabilize variance and model multiplicative effects. It's only applied to positive market values.
+### 3.5 Assemble Master Dataframe (`df`)
+*   The main `df` is created starting with player attributes from `players.csv`.
+*   `age` and `contract_remaining_years` are calculated.
+*   The `last_val`, `last_fee`, and the processed performance data (`perf` including `league_coef` and `prod_per90`) are all `left_join`ed to this `df`.
 
-2.  **Conditional Model Fitting**:
-    *   A linear model (`lm()`) is trained to predict `log_market_value`.
-    *   The predictors are `age`, `position_model` (player's position, treated as a factor with "Unknown" for NAs), and `contract_remaining_years`.
-    *   The model is only fitted if there are more than 10 valid data points (after filtering NAs in predictors and target) and more than one distinct position category (to ensure the `position_model` factor has enough levels).
-    *   `tryCatch` is used to handle potential errors during the `lm()` call.
+### 3.6 Fair Market Value (FMV) Model (Log-Linear Regression)
+This version uses a more sophisticated linear model for FMV estimation, incorporating performance data.
 
-3.  **Prediction and Fallback**:
-    *   If the model (`fit`) is successfully trained:
-        *   Predictions for `log_market_value` are made on the entire dataset.
-        *   Crucially, when predicting, the `position_model` factor in the `newdata` is explicitly set to have the same levels as those observed during model training (from `fit$model$position_model`). This prevents errors if new or unseen positions appear.
-        *   The `expm1()` function is used to transform the predictions back from the log scale to the original monetary scale (`fair_market_value_model`).
-    *   If model training fails or the conditions aren't met, a fallback mechanism is used: `fair_market_value_model` is set to `market_value * 1.10`.
-    *   The predicted FMV is floored at 0. If FMV is still `NA` but `market_value` exists, the fallback is applied again.
+1.  **Target Variable**:
+    *   `log_market_value`: The natural logarithm of `market_value` plus 1 (`log1p(market_value)`) is used as the target variable for the regression. This is done only if `market_value > 0`.
 
-### 3.6 Age-Dependent Corridor for FMV
-The model-derived FMV is further refined by an "age corridor" to ensure values are within plausible bounds relative to the player's current market value and age.
-*   Age-specific multipliers are defined to calculate `upper_bound_val` and `lower_bound_val` based on `market_value`. Younger players typically have wider corridors (e.g., a 20-year-old's FMV can be between 0.5x and 2.5x their market value).
-*   The `fair_market_value_model` is then "clamped" using `pmin(pmax(fmv, lower_bound_val), upper_bound_val)` to stay within this corridor. This adjustment is only applied if all necessary components (market value, FMV, bounds) are non-NA.
+2.  **Model Specification**:
+    *   A linear model (`lm()`) is fitted:
+        `log_market_value ~ age + position + contract_remaining_years + I(season_minutes/1000) + prod_per90 * league_coef`
+    *   **Predictors**:
+        *   `age`: Player's age.
+        *   `position`: Player's position (categorical).
+        *   `contract_remaining_years`: Contract duration.
+        *   `I(season_minutes/1000)`: Total season minutes played (scaled by dividing by 1000 for better coefficient interpretability). The `I()` function ensures the division is performed before being included in the model formula.
+        *   `prod_per90 * league_coef`: An interaction term between player productivity per 90 minutes and their league's strength coefficient. This allows the model to value productivity differently based on the league's toughness (e.g., a goal in a top league might be valued higher).
+    *   The model (`model_fmv`) is only trained if there are more than 30 rows with valid `log_market_value` and predictor data. `na.action = na.exclude` is used.
 
-### 3.7 Quick Scouting Metrics
-*   **`mv_to_fmv_ratio`**: Ratio of current `market_value` to the estimated `fair_market_value_model`.
-*   **`opportunity_score`**: A heuristic score calculated as `round(((20 - age) / 10) + (1 - mv_to_fmv_ratio), 2)`. It favors younger players and those whose market value is low relative to their FMV (i.e., `mv_to_fmv_ratio` is low). If `mv_to_fmv_ratio` is NA, it's treated as 1 for this calculation.
-*   **`opportunity_flag`**: A categorical flag ("High Priority Target", "Notable Prospect", "Standard Profile") based on the `opportunity_score`.
+3.  **Prediction**:
+    *   If `model_fmv` is successfully trained, predictions are made on the full `df`.
+    *   The `position` factor in the prediction data is aligned with the levels from the training data (`model_fmv$xlevels$position`) to prevent errors.
+    *   `expm1()` transforms the log-scale predictions back to the original monetary scale for `fair_market_value_model`.
+    *   If model training fails or conditions aren't met, `fair_market_value_model` is initially set to `NA_real_`.
+
+### 3.7 Age Corridor & Opportunity Metric/Flag
+This section refines the FMV and calculates the final scouting metrics.
+
+*   **Age Corridor**:
+    *   Similar to the previous version, `upper` and `lower` bounds for FMV are calculated based on age-specific multipliers applied to the player's `market_value`.
+    *   The `fair_market_value_model` is then clamped to stay within this corridor: `pmin(pmax(fair_market_value_model, lower), upper)`.
+    *   **Fallback**: If `fair_market_value_model` is still `NA` after the model prediction and corridor application (e.g., if `market_value` was `NA`, making the corridor bounds `NA`), it's set to `market_value * 1.10` as a final fallback.
+*   **Ratios & Scores**:
+    *   `mv_to_fmv_ratio`: `market_value / fair_market_value_model`.
+    *   **Performance Scores (`minutes_sc`, `prod_sc`)**:
+        *   `minutes_sc`: A scaled score (0, 0.3, 0.6, 1) based on `season_minutes` played. More minutes get a higher score.
+        *   `prod_sc`: A scaled score (0, 0.3, 0.6, 1) based on `prod_per90`. Higher productivity gets a higher score.
+    *   **`opportunity_score` (New Formula)**:
+        `round(0.45*(1 - mv_to_fmv_ratio) + 0.25*(30 - age)/30 + 0.15*minutes_sc + 0.15*prod_sc, 2)`
+        This score is now a weighted sum:
+        *   `45%` weight: Player being cheaper than FMV (`1 - mv_to_fmv_ratio`). A higher value here means `market_value` is lower than `fair_market_value_model`.
+        *   `25%` weight: Youthfulness (`(30 - age)/30`). Players younger than 30 get a positive contribution.
+        *   `15%` weight: Reliable minutes played (`minutes_sc`).
+        *   `15%` weight: Productivity score (`prod_sc`).
+*   **`opportunity_flag` (Valuation based on `opportunity_score`)**:
+    *   The flag is now interpreted as a valuation status based on the new `opportunity_score`:
+        *   `opportunity_score < 0`: "overvalued" (implies a poor opportunity based on the score's components)
+        *   `opportunity_score < 0.40` (and >= 0): "fair valued"
+        *   `opportunity_score >= 0.40`: "undervalued" (implies a good opportunity)
+    *   **Interpretation and Limitations of this `opportunity_flag`**:
+        *   This flag is an **indirect valuation**. It's not a direct comparison of a transaction price to FMV. Instead, it reflects whether the player represents a "good opportunity" according to the weighted `opportunity_score` formula.
+        *   A player flagged as "undervalued" here means their combined profile (age, market value relative to model FMV, minutes, productivity) suggests they are a good target. It primarily indicates that their *current market value* might be low for their modeled FMV and performance/age profile.
+        *   "Overvalued" suggests the opposite – their current market value might be high relative to their FMV and performance/age, or they are older with less upside according to the score.
+        *   This is different from a flag that would be set by comparing an *actual transfer fee paid* to the FMV (which was done in some previous iterations of the code). This version's flag is more about assessing current market standing versus a modeled fair value.
+        *   The thresholds (`<0`, `<0.40`) are subjective and determine the distribution of these flags. They may need adjustment based on the typical range of `opportunity_score` values observed in the dataset to provide meaningful categorizations.
 
 The `prep_data()` function returns the final `df`.
 
 *(The R code for data preparation is located in the `app.R` file.)*
 
-## 4. Theme + Custom SCSS
+## 4. Theme
 
 *   A Bootstrap 5 theme is initialized using `bslib::bs_theme(bootswatch = "pulse")`.
-*   The app attempts to load and apply custom styles from `www/soccer.scss` if the file exists.
+*   Custom styles from `www/soccer.scss` are applied if the file exists.
 
 *(The R code for theming is located in the `app.R` file.)*
 
 ## 5. User Interface (UI)
 
-The UI is built using `shiny::page_sidebar` for the overall layout.
+The UI structure remains similar to previous versions, with a filter sidebar and a main display area.
 
-*   **Sidebar**: Contains various input controls for filtering:
-    *   **Age Filter**: A `sliderInput("age_slide")` and two `numericInput`s (`age_min`, `age_max`) for range selection, styled to appear side-by-side.
-    *   **Fee Filter**: Similar `sliderInput("fee_slide")` and numeric inputs (`fee_min`, `fee_max`) for transfer fees.
-    *   **Position Filter**: `checkboxGroupInput("pos")` allowing multiple position selections, with an "Select / unselect all" `actionLink`. Only shown if position choices are available.
-    *   **Scouting Flag Filter**: `checkboxGroupInput("flag")` for `opportunity_flag`.
-    *   **Reset Button**: `actionButton("reset")` to revert all filters.
-*   **Main Area**:
-    *   **Player Card**: A `bslib::card` displays information for the currently selected player.
-        *   `uiOutput("player_header")`: Shows player name, age, position, and a visual progress bar comparing market value, FMV, and transfer fee.
-        *   Three `bslib::value_box` components (rendered via `uiOutput("vb_fmv")`, etc.) display FMV, market value, and opportunity score.
-    *   **Data Exploration Tabs**: A `bslib::navset_card_tab` contains:
-        *   A "Plot" panel with `plotlyOutput("bubble_plot_main")`.
-        *   A "Table" panel with `DTOutput("data_table_main")`.
+*   **Filter Inputs**: Sliders and numeric inputs for `age` and `transfer_fee`; checkbox groups for `position` and the `opportunity_flag` (now labeled "Valuation" in the UI, with choices "undervalued", "fair valued", "overvalued").
+*   **Main Area**: Player header card with value boxes (FMV, Market Value, and a value box now explicitly labeled "Valuation" displaying the `opportunity_flag` string and an icon based on it). Tabs for the Plotly bubble chart and the DT data table.
 
 *(The R code for the UI is located in the `app.R` file.)*
 
 ## 6. Server Logic
 
-The `server` function defines the app's backend logic and reactivity.
+The server function handles interactivity.
 
-### 6.1 Select/Unselect All Checkboxes
-*   `observeEvent` listeners for `input$pos_all` and `input$flag_all` toggle the selection state of the position and flag `checkboxGroupInput`s.
-
-### 6.2 Sync Sliders with Numeric Inputs
-*   A helper function `sync_slider_numeric` creates a two-way binding between the range sliders (e.g., `age_slide`) and their corresponding min/max `numericInput` fields (e.g., `age_min`, `age_max`).
-*   This ensures that changing the slider updates the numeric boxes, and changing a numeric box updates the slider, while also respecting the overall min/max bounds of the sliders.
-
-### 6.3 Reset Button
-*   An `observeEvent` for `input$reset` updates all filter inputs (sliders and checkboxes) back to their initial default values.
-
-### 6.4 Reactive Filtered Dataset (`filtered_data_reactive`)
-*   This `reactive` expression filters the `master_data` based on the current selections in `input$age_slide`, `input$fee_slide`, `input$pos`, and `input$flag`.
-*   For fee and age filters, `NA` values are included if the respective slider's lower bound is at its absolute minimum, implying the user hasn't actively filtered out records with missing values.
-*   If no options are selected in a checkbox group (e.g., all positions deselected), it results in no rows being returned for that filter step.
-
-### 6.5 Keep Track of Selected Player ID
-*   `selected_player_id_reactive <- reactiveVal()`: Stores the ID of the currently selected player.
-*   **Initialization & Update Logic**: An `observe` block initializes this `reactiveVal` with the first player from the `filtered_data_reactive` list. It also updates the selection if the currently selected player is no longer in the filtered list (e.g., due to filter changes) or clears the selection if the filtered list becomes empty.
-*   The `selected_player_id_reactive` is updated by:
-    *   Clicks on the Plotly bubble plot (via `event_data("plotly_click", source = "bubble_plot_source_id")`). The `customdata` attribute of the plot holds the `player_id`.
-    *   Row selection in the DT table (via `input$data_table_main_rows_selected`).
-*   `selected_player_details_reactive <- reactive(...)`: A reactive expression that fetches the full data row for the `selected_player_id_reactive()` from the original `master_data`.
-
-### 6.6 Value Boxes
-*   `output$vb_fmv`, `output$vb_mv`, `output$vb_opp` use `renderUI` to display `bslib::value_box` components for the selected player's FMV, market value, and opportunity score, using the `make_vb` helper and data from `selected_player_details_reactive()`.
-
-### 6.7 Player Header
-*   `output$player_header`: Dynamically renders the player's name, age, position. It also includes a simple horizontal progress bar composed of three segments, where the width of each segment visually represents the player's market value, FMV, and last transfer fee relative to the maximum of these three values.
-
-### 6.8 Bubble Plot
-*   `output$bubble_plot_main <- renderPlotly(...)`: Renders the interactive bubble plot.
-    *   Data is taken from `filtered_data_reactive()`.
-    *   Temporary `_display` columns are created to handle NAs specifically for plotting aesthetics (e.g., `market_value_display` for bubble size defaults to 1 if `market_value` is NA or zero).
-    *   Aesthetics: age (x), transfer fee (y), market value (size), position (color).
-    *   `customdata` is set to `player_id` for click interactivity, and `source` is set to "bubble_plot_source_id" to uniquely identify events from this plot.
-    *   `event_register("plotly_click")` enables click event capture.
-    *   Layout includes axis titles, a horizontal legend, adjusted margins, and pan as the drag mode. Markers have a slight opacity and border.
-
-### 6.9 Data Table
-*   `output$data_table_main <- renderDT(...)`: Renders an interactive data table using `DT::datatable`.
-    *   Data is from `filtered_data_reactive()`.
-    *   Columns are selected and renamed for a user-friendly display. The `player_id` column is included in the selected data but then hidden in the displayed table using `columnDefs` (it's still available for row selection logic).
-    *   Features include single row selection, no row names, top-row filtering (`filter = "top"`), responsive extension for better mobile viewing, and a custom search placeholder.
-    *   `formatCurrency` and `formatPercentage` are used to style numeric columns appropriately.
+*   **Filter Synchronization**: Logic for syncing sliders with numeric inputs and for "select/unselect all" checkbox links.
+*   **Reset Button**: Resets all filters.
+*   **Reactive Filtering (`filt`)**: Filters `master_data` based on user inputs.
+*   **Selected Player Tracking (`sel_id`, `player`)**: Manages which player is currently selected via plot clicks or table row selections.
+*   **Output Rendering**:
+    *   `renderUI` for value boxes and the player header. The "Valuation" value box (`output$vb_opp`) now displays the `opportunity_flag` string and changes its icon/theme based on whether the flag is "undervalued", "fair valued", or "overvalued".
+    *   `renderPlotly` for the bubble chart.
+    *   `renderDT` for the data table. The "Flag" column in the table displays the `opportunity_flag`.
 
 *(The R code for the Server logic is located in the `app.R` file.)*
 
 ## 7. Launch the App
 
-*   `shinyApp(ui, server)`: This command starts the Shiny application, bringing the UI and server logic together to create the interactive web dashboard.
+*   `shinyApp(ui, server)` starts the application.
+
+*(The R code for launching the app is located in the `app.R` file.)*
