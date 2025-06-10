@@ -1,30 +1,20 @@
 ###############################################################################
 #                                                                             #
-#                  Football Player Scouting Dashboard (v13)                     #
+#                  Football Player Scouting Dashboard                         #
 #                                                                             #
 ###############################################################################
-#                                                                             #
-# Project:      Final University Presentation Version                         #
-# Author:       AI Assistant (Gemini) & User Collaboration                    #
-# Date:         June 2024                                                     #
 #                                                                             #
 # Description:  This Shiny application provides an interactive dashboard for  #
 #               scouting football players. It allows users to filter players  #
 #               based on various metrics and visualizes the data through an   #
 #               interactive bubble chart and a data table. The dashboard      #
 #               calculates a custom "Opportunity Score" to identify           #
-#               potentially undervalued players.                               #
-#                                                                             #
-# Change Log:   v13 -> Players with no Opportunity Score are now excluded     #
-#               from the bubble chart and data table entirely.                #
-#                                                                             #
+#               potentially undervalued players.                              #                                                                            
 ###############################################################################
 
 
 ##### 1 · Load Required Libraries #############################################
 # -----------------------------------------------------------------------------
-# Libraries are collections of pre-written code (like toolkits or plugins) 
-# that provide special functions for our app.
 # -----------------------------------------------------------------------------
 library(shiny)        # The core framework for building the interactive web app.
 library(tidyverse)    # A powerful collection of tools for data manipulation and cleaning (e.g., dplyr, readr).
@@ -194,7 +184,7 @@ prep_data <- function(){
           0.15*minutes_sc         +  # Playing time (reliable minutes are good).
           0.15*prod_sc, 2),         # Productivity (goals/assists are good).
       
-      # Assign a human-readable flag based on the score.
+      # Assign a flag based on the score.
       opportunity_flag = if_else(
         is.na(opportunity_score), 
         NA_character_,
@@ -300,7 +290,7 @@ ui <- page_sidebar(
 ##### 6 · Server Logic ########################################################
 # -----------------------------------------------------------------------------
 # The server contains the instructions that tell the app how to react to user
-# input. It's the "brain" of the application.
+# input. 
 # -----------------------------------------------------------------------------
 server <- function(input, output, session){
   
@@ -325,9 +315,12 @@ server <- function(input, output, session){
   })
   
   ## 6.2 · Sync Sliders with Numeric Inputs -----------------------------------
-  # This custom function keeps the sliders and their corresponding number boxes perfectly in sync.
+  # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   sync <- function(slider, minbox, maxbox, lo, hi) {
+    # Observer 1: When the SLIDER changes, update the numeric boxes.
     observeEvent(input[[slider]], {
+      # Use isolate() to prevent this observer from triggering the others in a loop.
       if (!isTRUE(all.equal(isolate(input[[minbox]]), input[[slider]][1]))) {
         updateNumericInput(session, minbox, value = input[[slider]][1])
       }
@@ -336,24 +329,34 @@ server <- function(input, output, session){
       }
     }, ignoreInit = TRUE, ignoreNULL = TRUE)
     
-    observeEvent(c(input[[minbox]], input[[maxbox]]), {
-      mn <- input[[minbox]] %||% lo
-      mx <- input[[maxbox]] %||% hi
-      mn <- max(lo, mn, na.rm = TRUE)
-      mx <- min(hi, mx, na.rm = TRUE)
+    # Observer 2: When the MINIMUM numeric box changes...
+    observeEvent(input[[minbox]], {
+      min_val <- input[[minbox]] %||% lo
+      max_val <- isolate(input[[maxbox]]) %||% hi
       
-      if (mn > mx) {
-        if (!isTRUE(all.equal(mn, isolate(input[[slider]][1])))) {
-          mx <- mn; updateNumericInput(session, maxbox, value = mx)
-        } else {
-          mn <- mx; updateNumericInput(session, minbox, value = mn)
-        }
+      # If min crosses over max, bring max up to min's new value.
+      if (min_val > max_val) {
+        updateNumericInput(session, maxbox, value = min_val)
+        max_val <- min_val
       }
       
-      new_slider_vals <- c(mn, mx)
-      if (!isTRUE(all.equal(isolate(input[[slider]]), new_slider_vals))) {
-        updateSliderInput(session, slider, value = new_slider_vals)
+      # Update the slider to reflect the new range.
+      updateSliderInput(session, slider, value = c(min_val, max_val))
+    }, ignoreInit = TRUE, ignoreNULL = TRUE)
+    
+    # Observer 3: When the MAXIMUM numeric box changes...
+    observeEvent(input[[maxbox]], {
+      min_val <- isolate(input[[minbox]]) %||% lo
+      max_val <- input[[maxbox]] %||% hi
+      
+      # If max crosses over min, bring min down to max's new value.
+      if (max_val < min_val) {
+        updateNumericInput(session, minbox, value = max_val)
+        min_val <- max_val
       }
+      
+      # Update the slider to reflect the new range.
+      updateSliderInput(session, slider, value = c(min_val, max_val))
     }, ignoreInit = TRUE, ignoreNULL = TRUE)
   }
   
@@ -362,11 +365,11 @@ server <- function(input, output, session){
   sync("opp_score_slide", "opp_score_min", "opp_score_max", min_opp_score, max_opp_score)
   
   ## 6.3 · Reactive Filtered Data ---------------------------------------------
-  # This is a core concept of Shiny. `filt()` is a special object that holds the
+  # `filt()` is a special object that holds the
   # player data. It automatically re-filters this data whenever a UI filter is changed.
   filt <- reactive({
     master_data %>%
-      # NEW: Explicitly remove any player that does not have an opportunity score.
+      # Explicitly remove any player that does not have an opportunity score.
       filter(!is.na(opportunity_score)) %>%
       # Then, apply the user's filters.
       mutate(transfer_fee = replace_na(transfer_fee, 0)) %>%
@@ -391,8 +394,18 @@ server <- function(input, output, session){
   })
   
   ## 6.4 · Selected Player Tracking -------------------------------------------
-  # This section keeps track of which player is currently selected by the user.
-  sel_id <- reactiveVal() # Start with no player selected.
+  # Find the ID of the player with the highest market value to use as a default.
+  # This makes the dashboard load with an interesting player already selected.
+  initial_player_id <- master_data %>%
+    # In case of missing values, na.rm=TRUE is important.
+    filter(market_value == max(market_value, na.rm = TRUE)) %>%
+    # Get the player_id column.
+    pull(player_id) %>%
+    # In case of a tie for the highest value, just take the first one.
+    first()
+  
+  # Initialize the reactive value with our default player ID.
+  sel_id <- reactiveVal(initial_player_id)
   
   observeEvent(event_data("plotly_click", source="src"),
                sel_id(event_data("plotly_click", source="src")$customdata))
@@ -460,27 +473,27 @@ server <- function(input, output, session){
   # This code block generates the main plot using the `plotly` library.
   output$bubble <- renderPlotly({
     plot_ly(
-        data = filt(), 
-        x = ~age, 
-        y = ~transfer_fee, 
-        size = ~bubble_size,  # Bubble size is mapped to our custom score.
-        color = ~position,      # Bubbles are colored by player position.
-        customdata = ~player_id, # Store player ID for click events.
-        source = "src",         # A name for the plot source.
-        # Define the text that appears when hovering over a bubble.
-        text = ~paste0("<b>", name, "</b>",
-                      "<br>TM Value: ", fmt_euro(market_value),
-                      "<br>Fair MV: ", fmt_euro(fair_market_value_model),
-                      "<br>Transfer Fee: ", fmt_euro(transfer_fee),
-                      "<br>Opp. Score: ", round(opportunity_score, 2)),
-        hoverinfo = "text",
-        type = "scatter", 
-        mode = "markers",
-        marker = list(line = list(width = ~line_width, color = "rgba(0,0,0,0.5)"))
+      data = filt(), 
+      x = ~age, 
+      y = ~transfer_fee, 
+      size = ~bubble_size,  # Bubble size is mapped to our custom score.
+      color = ~position,      # Bubbles are colored by player position.
+      customdata = ~player_id, # Store player ID for click events.
+      source = "src",         # A name for the plot source.
+      # Define the text that appears when hovering over a bubble.
+      text = ~paste0("<b>", name, "</b>",
+                     "<br>TM Value: ", fmt_euro(market_value),
+                     "<br>Fair MV: ", fmt_euro(fair_market_value_model),
+                     "<br>Transfer Fee: ", fmt_euro(transfer_fee),
+                     "<br>Opp. Score: ", round(opportunity_score, 2)),
+      hoverinfo = "text",
+      type = "scatter", 
+      mode = "markers",
+      marker = list(line = list(width = ~line_width, color = "rgba(0,0,0,0.5)"))
     ) %>%
       event_register("plotly_click") %>%
       layout(xaxis = list(title = "Player Age"), 
-             yaxis = list(title = "Transfer Fee (in thousands €)"))
+             yaxis = list(title = "Transfer Fee (in €)"))
   })
   
   ## 6.8 · Render the Data Table ----------------------------------------------
@@ -513,3 +526,4 @@ server <- function(input, output, session){
 # This final line takes the UI and the Server logic and runs the application.
 # -----------------------------------------------------------------------------
 shinyApp(ui, server)
+#shiny::runApp()
